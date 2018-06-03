@@ -1,0 +1,106 @@
+---
+author: "Irene Ramos"
+---
+```{r setup, include=FALSE, message=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE)
+```
+
+## Predicting exercise quality with tracking devices
+###Summary
+The goal of this project is to generate a model that can predict if an exercise is well performed based on data collected from accelerometers on the belt, forearm, arm, and dumbell of 6 participants.The variable "classe" is the one to be predicted. 
+First, the documentation about this study was explored to find more specific information about the dataset and the experiment:
+http://web.archive.org/web/20161224072740/http:/groupware.les.inf.puc-rio.br/har
+PaperVelloso, E.; Bulling, A.; Gellersen, H.; Ugulino, W.; Fuks, H. Qualitative Activity Recognition of Weight Lifting Exercises. Proceedings of 4th International Conference in Cooperation with SIGCHI (Augmented Human '13) . Stuttgart, Germany: ACM SIGCHI, 2013.
+In this study, six young health participants were asked to perform one set of 10 repetitions of the unilateral dumbbell biceps curl in five different fashions:
+("classe"" variable description) exactly according to the specification (Class A), throwing the elbows to the front (Class B), lifting the dumbbell only halfway (Class C), lowering the dumbbell only halfway (Class D) and throwing the hips to the front (Class E). 
+
+```{r ,message=FALSE}
+#load libraries
+library(readr)
+library(caret)
+library(data.table)
+library(dplyr)
+library(GGally)
+#set up directory: setwd("/Users/ireneramoslopez/Documents/Machine learning 2018")
+#read training data
+training <- read_csv("pml-training.csv")
+```
+
+### Exploratory analysis and feature selection
+The training dataset has 160 variables. Therefore, to reduce the variables number of variables, those variables with near zero variance were identified and removed. Also some of the variables had most of the values missing. Those variables were also eliminated from the analysis. Identification of highly correlated variables was also done but they were left in the model since there was not a high number and they shouldn't affect the model. Lastly, the first 6 columns were also included as they did not contain any predictive information. The final dataset after this selection proscess had 52 predictors.
+
+```{r ,message=FALSE}
+#exclude variables from the data set with no variability:
+nzv <- nearZeroVar(training, saveMetrics = TRUE)
+nzv <- setDT(nzv, keep.rownames = TRUE)[]
+nzv_vars <- filter(nzv, nzv == FALSE)
+# select variables no nzv in training
+training2 <- training[nzv_vars$rn] #reduced to 119 vars (including classe)
+#Many columns have mostly NA values, so we remove those from the model: 
+no_NA_columns <- colnames(training2)[colSums(is.na(training2)) < 19000]
+training3 <- select(training2, no_NA_columns)
+#reduced to 59 vars (including classe)
+training4 <- training3[,7:59] #remove variables 1-6 from data set
+```
+
+As the purpose of the testing set provided in the assignment is to be used in the final quiz and does not contain the classe column, a partition of the training set in new "training" and "testing" sets was created to provide additional evaluation of the model. 
+
+```{r ,message=FALSE}
+#create data partition
+trainingFinal <- createDataPartition(training4$classe, p = 0.7, list = FALSE)
+training <- training4[trainingFinal, ]
+testing <- training4[-trainingFinal, ]
+```
+
+Some more exploratory analysis was done plotting all the pre-selected variables against the others. Examples of the variables that seemed more predictive are shown below.
+
+```{r ,message=FALSE, echo=FALSE}
+# plot a number of variables
+#most predictive variables identified by exploratory analysis, shown in 3 plots
+ggpairs(training[,c(14,18,19,53)], aes(colour = classe, alpha=0.6))
+ggpairs(training[,c(21,24,25,53)], aes(colour = classe, alpha=0.6))
+ggpairs(training[,c(40,48,51,53)], aes(colour = classe, alpha=0.6))
+```
+
+### Building the model
+Several models were tested, including classification trees ("rpart"), boosting with trees ("gmb") and random forest ("rf"). However the one that showed better accuracy was random trees, which is described below. 5-fold cross validation and parallel processing in caret was performed following these recomendations:  https://github.com/lgreski/datasciencectacontent/blob/master/markdown/pml-randomForestPerformance.md
+
+```{r ,message=FALSE, echo=FALSE}
+# Use a random forest model with 5-fold cross validation
+# load libraries for parallel processing in caret
+# reference:
+library(parallel)
+library(doParallel)
+cluster <- makeCluster(detectCores() - 1) # convention to leave 1 core for OS
+registerDoParallel(cluster)
+#configure traincontrol object
+fitControl <- trainControl(method = "cv",
+                           number = 5,
+                           allowParallel = TRUE)
+```
+
+```{r ,message=FALSE, echo=TRUE}
+##ramdon forest model
+modelfit_rf <- train(as.factor(classe) ~ ., data = training, method = "rf",trControl = fitControl,na.action = na.omit)
+```
+
+```{r ,message=FALSE, echo=FALSE}
+stopCluster(cluster)#shut down the cluster
+registerDoSEQ() #force R to return to single threaded processing
+```
+
+### Accuracy, cross validation and expected out of sample error 
+Accuracy, values helding out folds (cross validation) during the model building phase and classification errors can be observed below
+```{r ,message=FALSE, echo=FALSE}
+modelfit_rf
+modelfit_rf$resample
+modelfit_rf$finalModel
+```
+
+Finally, the model was evaluated in the testing dataset that was particioned from the initial training dataset. The different types of errors such as sensitivity, specificity, or positive and negative predictive values are shown below. Overall, the predictive model showed very good performance accross the board. 
+
+```{r ,message=FALSE, echo=FALSE}
+test_pred <- predict(modelfit_rf, newdata=testing)
+#see classification errors below
+confusionMatrix(test_pred,as.factor(testing$classe))
+```
